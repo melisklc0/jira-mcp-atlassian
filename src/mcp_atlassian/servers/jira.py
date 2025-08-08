@@ -5,7 +5,7 @@ import logging
 from typing import Annotated, Any
 
 from fastmcp import Context, FastMCP
-from pydantic import Field
+from pydantic import BeforeValidator, Field
 from requests.exceptions import HTTPError
 
 from mcp_atlassian.exceptions import MCPAtlassianAuthenticationError
@@ -15,6 +15,35 @@ from mcp_atlassian.servers.dependencies import get_jira_fetcher
 from mcp_atlassian.utils.decorators import check_write_access
 
 logger = logging.getLogger(__name__)
+
+
+def validate_dict_field(value: Any) -> dict[str, Any] | None:
+    """Validate and convert dict field parameters.
+    
+    Args:
+        value: The input value to validate
+        
+    Returns:
+        Validated dictionary or None
+        
+    Raises:
+        ValueError: If the value cannot be converted to a dictionary
+    """
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+            if isinstance(parsed, dict):
+                return parsed
+            else:
+                raise ValueError(f"JSON string must represent a dictionary, got {type(parsed)}")
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Invalid JSON string: {e}")
+    raise ValueError(f"Expected dict, None, or JSON string, got {type(value)}")
+
 
 jira_mcp = FastMCP(
     name="Jira MCP Service",
@@ -655,6 +684,7 @@ async def create_issue(
     ] = None,
     additional_fields: Annotated[
         dict[str, Any] | None,
+        BeforeValidator(validate_dict_field),
         Field(
             description=(
                 "(Optional) Dictionary of additional fields to set. Examples:\n"
@@ -874,6 +904,7 @@ async def update_issue(
     ],
     additional_fields: Annotated[
         dict[str, Any] | None,
+        BeforeValidator(validate_dict_field),
         Field(
             description="(Optional) Dictionary of additional fields to update. Use this for custom fields or more complex updates.",
             default=None,
