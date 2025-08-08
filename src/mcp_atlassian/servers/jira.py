@@ -1138,7 +1138,7 @@ async def link_to_epic(
         # Use direct parent field update - simpler and more reliable approach
         # This sets the epic as the parent of the issue
         update_fields = {"parent": {"key": epic_key}}
-        updated_issue = jira.update_issue(issue_key=issue_key, **update_fields)
+        updated_issue = jira.update_issue(issue_key=issue_key, fields=update_fields)
         
         result = {
             "success": True,
