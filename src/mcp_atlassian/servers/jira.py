@@ -683,11 +683,11 @@ async def create_issue(
         ),
     ] = None,
     additional_fields: Annotated[
-        dict[str, Any] | None,
+        str | dict[str, Any] | None,
         BeforeValidator(validate_dict_field),
         Field(
             description=(
-                "(Optional) Dictionary of additional fields to set. Examples:\n"
+                "(Optional) Dictionary of additional fields to set. Can be passed as JSON string or object. Examples:\n"
                 "- Set priority: {'priority': {'name': 'High'}}\n"
                 "- Add labels: {'labels': ['frontend', 'urgent']}\n"
                 "- Link to parent (for any issue type): {'parent': 'PROJ-123'}\n"
@@ -903,10 +903,10 @@ async def update_issue(
         ),
     ],
     additional_fields: Annotated[
-        dict[str, Any] | None,
+        str | dict[str, Any] | None,
         BeforeValidator(validate_dict_field),
         Field(
-            description="(Optional) Dictionary of additional fields to update. Use this for custom fields or more complex updates.",
+            description="(Optional) Dictionary of additional fields to update. Use this for custom fields or more complex updates. Can be passed as JSON string or object.",
             default=None,
         ),
     ] = None,
