@@ -28,7 +28,11 @@ async def get_user_profile(
     user_identifier: Annotated[
         str,
         Field(
-            description="Identifier for the user (e.g., email address 'user@example.com', username 'johndoe', account ID 'accountid:...', or key for Server/DC)."
+            description=(
+                "Identifier for the user (e.g., email address "
+                "'user@example.com', username 'johndoe', account ID "
+                "'accountid:...', or key for Server/DC)."
+            )
         ),
     ],
 ) -> str:
@@ -40,7 +44,8 @@ async def get_user_profile(
         user_identifier: User identifier (email, username, key, or account ID).
 
     Returns:
-        JSON string representing the Jira user profile object, or an error object if not found.
+        JSON string representing the Jira user profile object, or an error
+        object if not found.
 
     Raises:
         ValueError: If the Jira client is not configured or available.
@@ -125,7 +130,6 @@ async def get_issue(
         bool,
         Field(
             description="Whether to update the issue view history for the requesting user",
-            default=True,
         ),
     ] = True,
 ) -> str:
@@ -265,7 +269,7 @@ async def search_fields(
     ] = 10,
     refresh: Annotated[
         bool,
-        Field(description="Whether to force refresh the field list", default=False),
+        Field(description="Whether to force refresh the field list"),
     ] = False,
 ) -> str:
     """Search Jira fields by keyword with fuzzy match.
@@ -761,10 +765,11 @@ async def batch_create_issues(
         issues_list = json.loads(issues)
         if not isinstance(issues_list, list):
             raise ValueError("Input 'issues' must be a JSON array string.")
-    except json.JSONDecodeError:
-        raise ValueError("Invalid JSON in issues")
+    except json.JSONDecodeError as e:
+        raise ValueError("Invalid JSON in issues") from e
     except Exception as e:
-        raise ValueError(f"Invalid input for issues: {e}") from e
+        msg = f"Invalid input for issues: {e}"
+        raise ValueError(msg) from e
 
     # Create issues in batch
     created_issues = jira.batch_create_issues(issues_list, validate_only=validate_only)
@@ -950,8 +955,9 @@ async def update_issue(
             ensure_ascii=False,
         )
     except Exception as e:
-        logger.error(f"Error updating issue {issue_key}: {str(e)}", exc_info=True)
-        raise ValueError(f"Failed to update issue {issue_key}: {str(e)}")
+        logger.error(f"Error updating issue {issue_key}: {str(e)}", exc_info=True) 
+        msg = f"Failed to update issue {issue_key}: {str(e)}"
+        raise ValueError(msg) from e
 
 
 @jira_mcp.tool(tags={"jira", "write"})
@@ -973,7 +979,7 @@ async def delete_issue(
         ValueError: If in read-only mode or Jira client unavailable.
     """
     jira = await get_jira_fetcher(ctx)
-    deleted = jira.delete_issue(issue_key)
+    jira.delete_issue(issue_key)
     result = {"message": f"Issue {issue_key} has been deleted successfully."}
     # The underlying method raises on failure, so if we reach here, it's success.
     return json.dumps(result, indent=2, ensure_ascii=False)
@@ -1618,10 +1624,11 @@ async def batch_create_versions(
         version_list = json.loads(versions)
         if not isinstance(version_list, list):
             raise ValueError("Input 'versions' must be a JSON array string.")
-    except json.JSONDecodeError:
-        raise ValueError("Invalid JSON in versions")
+    except json.JSONDecodeError as e:
+        raise ValueError("Invalid JSON in versions") from e
     except Exception as e:
-        raise ValueError(f"Invalid input for versions: {e}") from e
+        msg = f"Invalid input for versions: {e}"
+        raise ValueError(msg) from e
 
     results = []
     if not version_list:
@@ -1660,7 +1667,9 @@ async def batch_create_versions(
 async def add_issue_to_sprint(
     ctx: Context,
     issue_key: Annotated[str, Field(description="Jira issue key (e.g., 'PROJ-123')")],
-    sprint_id: Annotated[str, Field(description="The ID of the sprint (e.g., '10001')")],
+    sprint_id: Annotated[
+        str, Field(description="The ID of the sprint (e.g., '10001')")
+    ],
 ) -> str:
     """Add an existing issue to a sprint.
 
@@ -1680,13 +1689,13 @@ async def add_issue_to_sprint(
         # Get sprint field information
         field_ids = jira.get_field_ids_to_epic()
         sprint_field = None
-        
+
         # Find the Sprint field
         for field_name, field_id in field_ids.items():
             if "sprint" in field_name.lower():
                 sprint_field = field_id
                 break
-        
+
         # Fallback to common sprint field IDs
         if not sprint_field:
             common_sprint_fields = [
@@ -1702,15 +1711,16 @@ async def add_issue_to_sprint(
                     if issue:
                         sprint_field = field_id
                         break
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"Sprint field check failed: {str(e)}")
                     continue
-        
+
         if not sprint_field:
             # Try using the direct API endpoint
             endpoint = f"rest/agile/1.0/sprint/{sprint_id}/issue"
             data = {"issues": [issue_key]}
-            response = jira.jira.post(endpoint, json=data)
-            
+            jira.jira.post(endpoint, json=data)
+
             result = {
                 "success": True,
                 "message": f"Issue {issue_key} added to sprint {sprint_id}",
@@ -1722,16 +1732,17 @@ async def add_issue_to_sprint(
             # Update using the sprint field
             update_fields = {sprint_field: [{"id": sprint_id}]}
             issue = jira.update_issue(issue_key=issue_key, **update_fields)
-            
+
             result = {
                 "message": f"Issue {issue_key} added to sprint {sprint_id}",
                 "issue": issue.to_simplified_dict(),
             }
             return json.dumps(result, indent=2, ensure_ascii=False)
-            
+
     except Exception as e:
         logger.error(f"Error adding issue {issue_key} to sprint {sprint_id}: {str(e)}")
-        raise ValueError(f"Failed to add issue to sprint: {str(e)}")
+        msg = f"Failed to add issue to sprint: {str(e)}"
+        raise ValueError(msg) from e
 
 
 @jira_mcp.tool(tags={"jira", "write"})
@@ -1739,14 +1750,24 @@ async def add_issue_to_sprint(
 async def create_sprint_and_add_issues(
     ctx: Context,
     board_id: Annotated[str, Field(description="The id of board (e.g., '1000')")],
-    sprint_name: Annotated[str, Field(description="Name of the sprint (e.g., 'Sprint 1')")],
-    start_date: Annotated[str, Field(description="Start time for sprint (ISO 8601 format)")],
-    end_date: Annotated[str, Field(description="End time for sprint (ISO 8601 format)")],
-    issue_keys: Annotated[
-        list[str], 
-        Field(description="List of issue keys to add to the sprint (e.g., ['PROJ-123', 'PROJ-124'])")
+    sprint_name: Annotated[
+        str, Field(description="Name of the sprint (e.g., 'Sprint 1')")
     ],
-    goal: Annotated[str | None, Field(description="(Optional) Goal of the sprint")] = None,
+    start_date: Annotated[
+        str, Field(description="Start time for sprint (ISO 8601 format)")
+    ],
+    end_date: Annotated[
+        str, Field(description="End time for sprint (ISO 8601 format)")
+    ],
+    issue_keys: Annotated[
+        list[str],
+        Field(
+            description="List of issue keys to add to the sprint (e.g., ['PROJ-123', 'PROJ-124'])"
+        ),
+    ],
+    goal: Annotated[
+        str | None, Field(description="(Optional) Goal of the sprint")
+    ] = None,
 ) -> str:
     """Create a new sprint and add issues to it.
 
@@ -1775,9 +1796,9 @@ async def create_sprint_and_add_issues(
             end_date=end_date,
             goal=goal,
         )
-        
+
         sprint_id = str(sprint.id)
-        
+
         # Add issues to the sprint
         add_results = []
         for issue_key in issue_keys:
@@ -1786,37 +1807,42 @@ async def create_sprint_and_add_issues(
                 endpoint = f"rest/agile/1.0/sprint/{sprint_id}/issue"
                 data = {"issues": [issue_key]}
                 jira.jira.post(endpoint, json=data)
-                
-                add_results.append({
-                    "issue_key": issue_key,
-                    "success": True,
-                    "message": f"Issue {issue_key} added to sprint"
-                })
+
+                add_results.append(
+                    {
+                        "issue_key": issue_key,
+                        "success": True,
+                        "message": f"Issue {issue_key} added to sprint",
+                    }
+                )
             except Exception as e:
-                add_results.append({
-                    "issue_key": issue_key,
-                    "success": False,
-                    "error": str(e)
-                })
-        
+                add_results.append(
+                    {"issue_key": issue_key, "success": False, "error": str(e)}
+                )
+
         result = {
             "message": f"Sprint {sprint_name} created and issues added",
             "sprint": sprint.to_simplified_dict(),
             "issue_results": add_results,
         }
         return json.dumps(result, indent=2, ensure_ascii=False)
-        
+
     except Exception as e:
         logger.error(f"Error creating sprint and adding issues: {str(e)}")
-        raise ValueError(f"Failed to create sprint and add issues: {str(e)}")
+        msg = f"Failed to create sprint and add issues: {str(e)}"
+        raise ValueError(msg) from e
 
 
 @jira_mcp.tool(tags={"jira", "write"})
 @check_write_access
 async def create_parent_child_link(
     ctx: Context,
-    parent_issue_key: Annotated[str, Field(description="The key of the parent issue (e.g., 'PROJ-123')")],
-    child_issue_key: Annotated[str, Field(description="The key of the child issue (e.g., 'PROJ-456')")],
+    parent_issue_key: Annotated[
+        str, Field(description="The key of the parent issue (e.g., 'PROJ-123')")
+    ],
+    child_issue_key: Annotated[
+        str, Field(description="The key of the child issue (e.g., 'PROJ-456')")
+    ],
 ) -> str:
     """Create a parent-child relationship between two issues.
 
@@ -1837,7 +1863,7 @@ async def create_parent_child_link(
         try:
             update_fields = {"parent": {"key": parent_issue_key}}
             child_issue = jira.update_issue(issue_key=child_issue_key, **update_fields)
-            
+
             result = {
                 "success": True,
                 "message": f"Parent-child relationship created: {parent_issue_key} -> {child_issue_key}",
@@ -1846,7 +1872,7 @@ async def create_parent_child_link(
                 "updated_issue": child_issue.to_simplified_dict(),
             }
             return json.dumps(result, indent=2, ensure_ascii=False)
-            
+
         except Exception:
             # If direct parent field doesn't work, try creating an issue link
             link_data = {
@@ -1854,15 +1880,15 @@ async def create_parent_child_link(
                 "inwardIssue": {"key": child_issue_key},
                 "outwardIssue": {"key": parent_issue_key},
             }
-            
+
             # Try different link types that represent parent-child relationships
             link_types = ["Subtask", "Sub-task", "Child Issue", "Contains", "Parent"]
-            
+
             for link_type in link_types:
                 try:
                     link_data["type"]["name"] = link_type
                     link_result = jira.create_issue_link(link_data)
-                    
+
                     result = {
                         "success": True,
                         "message": f"Parent-child relationship created using {link_type} link: {parent_issue_key} -> {child_issue_key}",
@@ -1872,25 +1898,34 @@ async def create_parent_child_link(
                         "link_result": link_result,
                     }
                     return json.dumps(result, indent=2, ensure_ascii=False)
-                    
+
                 except Exception as link_error:
-                    logger.debug(f"Failed to create {link_type} link: {str(link_error)}")
+                    logger.debug(
+                        f"Failed to create {link_type} link: {str(link_error)}"
+                    )
                     continue
-            
+
             # If all link types fail, raise the original error
-            raise ValueError("Could not create parent-child relationship using any available method")
-            
+            raise ValueError(
+                "Could not create parent-child relationship using any available method"
+            ) from None
+
     except Exception as e:
         logger.error(f"Error creating parent-child link: {str(e)}")
-        raise ValueError(f"Failed to create parent-child relationship: {str(e)}")
+        msg = f"Failed to create parent-child relationship: {str(e)}"
+        raise ValueError(msg) from e
 
 
 @jira_mcp.tool(tags={"jira", "write"})
 @check_write_access
 async def link_issue_to_epic_enhanced(
     ctx: Context,
-    issue_key: Annotated[str, Field(description="The key of the issue to link (e.g., 'PROJ-123')")],
-    epic_key: Annotated[str, Field(description="The key of the epic to link to (e.g., 'PROJ-456')")],
+    issue_key: Annotated[
+        str, Field(description="The key of the issue to link (e.g., 'PROJ-123')")
+    ],
+    epic_key: Annotated[
+        str, Field(description="The key of the epic to link to (e.g., 'PROJ-456')")
+    ],
 ) -> str:
     """Link an existing issue to an epic with enhanced error handling and multiple strategies.
 
@@ -1917,7 +1952,7 @@ async def link_issue_to_epic_enhanced(
             "issue": issue.to_simplified_dict(),
         }
         return json.dumps(result, indent=2, ensure_ascii=False)
-        
+
     except Exception as e:
         logger.error(f"Error linking issue to epic: {str(e)}")
         # Try alternative approach using issue links
@@ -1927,15 +1962,15 @@ async def link_issue_to_epic_enhanced(
                 "inwardIssue": {"key": issue_key},
                 "outwardIssue": {"key": epic_key},
             }
-            
+
             # Try different epic link types
             epic_link_types = ["Epic-Story Link", "Epic Link", "Relates to", "Epic"]
-            
+
             for link_type in epic_link_types:
                 try:
                     link_data["type"]["name"] = link_type
                     link_result = jira.create_issue_link(link_data)
-                    
+
                     result = {
                         "success": True,
                         "message": f"Issue {issue_key} linked to epic {epic_key} using {link_type}",
@@ -1945,22 +1980,34 @@ async def link_issue_to_epic_enhanced(
                         "link_result": link_result,
                     }
                     return json.dumps(result, indent=2, ensure_ascii=False)
-                    
+
                 except Exception as link_error:
-                    logger.debug(f"Failed to create {link_type} link: {str(link_error)}")
+                    logger.debug(
+                        f"Failed to create {link_type} link: {str(link_error)}"
+                    )
                     continue
-            
-            raise ValueError(f"Failed to link issue to epic using any method: {str(e)}")
-            
+
+            msg = f"Failed to link issue to epic using any method: {str(e)}"
+            raise ValueError(msg)
+
         except Exception as fallback_error:
-            raise ValueError(f"Failed to link issue to epic: {str(fallback_error)}")
+            msg = f"Failed to link issue to epic: {str(fallback_error)}"
+            raise ValueError(msg) from fallback_error
 
 
 @jira_mcp.tool(tags={"jira", "read"})
 async def get_active_sprints(
     ctx: Context,
-    board_id: Annotated[str | None, Field(description="(Optional) The id of board to filter active sprints (e.g., '1000')")] = None,
-    limit: Annotated[int, Field(description="Maximum number of results (1-50)", default=10, ge=1, le=50)] = 10,
+    board_id: Annotated[
+        str | None,
+        Field(
+            description="(Optional) The id of board to filter active sprints (e.g., '1000')"
+        ),
+    ] = None,
+    limit: Annotated[
+        int,
+        Field(description="Maximum number of results (1-50)", default=10, ge=1, le=50),
+    ] = 10,
 ) -> str:
     """Get all active sprints, optionally filtered by board.
 
@@ -1984,30 +2031,33 @@ async def get_active_sprints(
             # This is more complex as we need to search across boards
             boards = jira.get_all_agile_boards_model(limit=50)  # Get boards first
             all_active_sprints = []
-            
+
             for board in boards:
                 try:
                     board_sprints = jira.get_all_sprints_from_board_model(
                         board_id=str(board.id), state="active", limit=limit
                     )
                     all_active_sprints.extend(board_sprints)
-                    
+
                     # Stop if we've reached the limit
                     if len(all_active_sprints) >= limit:
                         all_active_sprints = all_active_sprints[:limit]
                         break
                 except Exception as e:
-                    logger.debug(f"Error getting sprints for board {board.id}: {str(e)}")
+                    logger.debug(
+                        f"Error getting sprints for board {board.id}: {str(e)}"
+                    )
                     continue
-            
+
             sprints = all_active_sprints
-        
+
         result = [sprint.to_simplified_dict() for sprint in sprints]
         return json.dumps(result, indent=2, ensure_ascii=False)
-        
+
     except Exception as e:
         logger.error(f"Error getting active sprints: {str(e)}")
-        raise ValueError(f"Failed to get active sprints: {str(e)}")
+        msg = f"Failed to get active sprints: {str(e)}"
+        raise ValueError(msg) from e
 
 
 @jira_mcp.tool(tags={"jira", "write"})
@@ -2015,8 +2065,14 @@ async def get_active_sprints(
 async def start_sprint(
     ctx: Context,
     sprint_id: Annotated[str, Field(description="The id of sprint (e.g., '10001')")],
-    start_date: Annotated[str | None, Field(description="(Optional) Start date for the sprint (ISO 8601 format)")] = None,
-    end_date: Annotated[str | None, Field(description="(Optional) End date for the sprint (ISO 8601 format)")] = None,
+    start_date: Annotated[
+        str | None,
+        Field(description="(Optional) Start date for the sprint (ISO 8601 format)"),
+    ] = None,
+    end_date: Annotated[
+        str | None,
+        Field(description="(Optional) End date for the sprint (ISO 8601 format)"),
+    ] = None,
 ) -> str:
     """Start a sprint by setting its state to active.
 
@@ -2037,8 +2093,9 @@ async def start_sprint(
         # Set default start date to now if not provided
         if not start_date:
             from datetime import datetime, timezone
+
             start_date = datetime.now(timezone.utc).isoformat()
-        
+
         sprint = jira.update_sprint(
             sprint_id=sprint_id,
             sprint_name=None,  # Keep existing name
@@ -2047,11 +2104,11 @@ async def start_sprint(
             end_date=end_date,
             goal=None,  # Keep existing goal
         )
-        
+
         if sprint is None:
             error_payload = {
                 "success": False,
-                "error": f"Failed to start sprint {sprint_id}. Check logs for details."
+                "error": f"Failed to start sprint {sprint_id}. Check logs for details.",
             }
             return json.dumps(error_payload, indent=2, ensure_ascii=False)
         else:
@@ -2061,10 +2118,11 @@ async def start_sprint(
                 "sprint": sprint.to_simplified_dict(),
             }
             return json.dumps(result, indent=2, ensure_ascii=False)
-            
+
     except Exception as e:
         logger.error(f"Error starting sprint {sprint_id}: {str(e)}")
-        raise ValueError(f"Failed to start sprint: {str(e)}")
+        msg = f"Failed to start sprint: {str(e)}"
+        raise ValueError(msg) from e
 
 
 @jira_mcp.tool(tags={"jira", "write"})
@@ -2072,7 +2130,10 @@ async def start_sprint(
 async def complete_sprint(
     ctx: Context,
     sprint_id: Annotated[str, Field(description="The id of sprint (e.g., '10001')")],
-    end_date: Annotated[str | None, Field(description="(Optional) End date for the sprint (ISO 8601 format)")] = None,
+    end_date: Annotated[
+        str | None,
+        Field(description="(Optional) End date for the sprint (ISO 8601 format)"),
+    ] = None,
 ) -> str:
     """Complete a sprint by setting its state to closed.
 
@@ -2092,8 +2153,9 @@ async def complete_sprint(
         # Set default end date to now if not provided
         if not end_date:
             from datetime import datetime, timezone
+
             end_date = datetime.now(timezone.utc).isoformat()
-        
+
         sprint = jira.update_sprint(
             sprint_id=sprint_id,
             sprint_name=None,  # Keep existing name
@@ -2102,11 +2164,11 @@ async def complete_sprint(
             end_date=end_date,
             goal=None,  # Keep existing goal
         )
-        
+
         if sprint is None:
             error_payload = {
                 "success": False,
-                "error": f"Failed to complete sprint {sprint_id}. Check logs for details."
+                "error": f"Failed to complete sprint {sprint_id}. Check logs for details.",
             }
             return json.dumps(error_payload, indent=2, ensure_ascii=False)
         else:
@@ -2116,7 +2178,8 @@ async def complete_sprint(
                 "sprint": sprint.to_simplified_dict(),
             }
             return json.dumps(result, indent=2, ensure_ascii=False)
-            
+
     except Exception as e:
         logger.error(f"Error completing sprint {sprint_id}: {str(e)}")
-        raise ValueError(f"Failed to complete sprint: {str(e)}")
+        msg = f"Failed to complete sprint: {str(e)}"
+        raise ValueError(msg) from e
