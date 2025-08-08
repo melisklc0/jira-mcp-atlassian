@@ -1120,7 +1120,7 @@ async def link_to_epic(
         str, Field(description="The key of the epic to link to (e.g., 'PROJ-456')")
     ],
 ) -> str:
-    """Link an existing issue to an epic.
+    """Link an existing issue to an epic by setting the epic as the parent of the issue.
 
     Args:
         ctx: The FastMCP context.
@@ -1134,12 +1134,30 @@ async def link_to_epic(
         ValueError: If in read-only mode or Jira client unavailable.
     """
     jira = await get_jira_fetcher(ctx)
-    issue = jira.link_issue_to_epic(issue_key, epic_key)
-    result = {
-        "message": f"Issue {issue_key} has been linked to epic {epic_key}.",
-        "issue": issue.to_simplified_dict(),
-    }
-    return json.dumps(result, indent=2, ensure_ascii=False)
+    try:
+        # Use direct parent field update - simpler and more reliable approach
+        # This sets the epic as the parent of the issue
+        update_fields = {"parent": {"key": epic_key}}
+        updated_issue = jira.update_issue(issue_key=issue_key, **update_fields)
+        
+        result = {
+            "success": True,
+            "message": f"Issue {issue_key} has been linked to epic {epic_key} as parent",
+            "issue": updated_issue.to_simplified_dict(),
+            "epic_key": epic_key,
+            "link_type": "parent"
+        }
+        return json.dumps(result, indent=2, ensure_ascii=False)
+        
+    except Exception as e:
+        logger.error(f"Error linking issue to epic: {str(e)}")
+        # Provide more detailed error information
+        result = {
+            "success": False,
+            "error": str(e),
+            "message": f"Failed to link issue {issue_key} to epic {epic_key}. Error: {str(e)}"
+        }
+        return json.dumps(result, indent=2, ensure_ascii=False)
 
 
 @jira_mcp.tool(tags={"jira", "write"})
@@ -1907,95 +1925,6 @@ async def create_parent_child_link(
         msg = f"Failed to create parent-child relationship: {str(e)}"
         raise ValueError(msg) from e
 
-
-@jira_mcp.tool(tags={"jira", "write"})
-@check_write_access
-async def link_issue_to_epic_enhanced(
-    ctx: Context,
-    issue_key: Annotated[
-        str, Field(description="The key of the issue to link (e.g., 'PROJ-123')")
-    ],
-    epic_key: Annotated[
-        str, Field(description="The key of the epic to link to (e.g., 'PROJ-456')")
-    ],
-) -> str:
-    """Link an existing issue to an epic with enhanced error handling and multiple strategies.
-
-    This is an enhanced version of the existing link_to_epic tool with better error handling
-    and support for multiple linking strategies.
-
-    Args:
-        ctx: The FastMCP context.
-        issue_key: The key of the issue to link.
-        epic_key: The key of the epic to link to.
-
-    Returns:
-        JSON string representing the updated issue object.
-
-    Raises:
-        ValueError: If in read-only mode or Jira client unavailable.
-    """
-    jira = await get_jira_fetcher(ctx)
-    try:
-        # Try the most common and reliable approach first: update issue with parent field
-        # This works for most epic-story relationships
-        try:
-            update_fields = {"parent": {"key": epic_key}}
-            issue = jira.update_issue(issue_key=issue_key, **update_fields)
-            
-            result = {
-                "success": True,
-                "message": f"Issue {issue_key} has been linked to epic {epic_key}",
-                "issue": issue.to_simplified_dict(),
-            }
-            return json.dumps(result, indent=2, ensure_ascii=False)
-            
-        except Exception as parent_error:
-            logger.debug(f"Parent field update failed: {str(parent_error)}")
-            
-            # Fallback: Try creating an issue link with "Relates to"
-            link_data = {
-                "type": {"name": "Relates"},
-                "inwardIssue": {"key": issue_key},
-                "outwardIssue": {"key": epic_key},
-                "comment": {
-                    "body": f"Epic relationship: {issue_key} belongs to epic {epic_key}"
-                }
-            }
-
-            try:
-                link_result = jira.create_issue_link(link_data)
-                
-                result = {
-                    "success": True,
-                    "message": f"Issue {issue_key} linked to epic {epic_key} using Relates link",
-                    "issue_key": issue_key,
-                    "epic_key": epic_key,
-                    "link_type": "Relates",
-                    "link_result": link_result,
-                }
-                return json.dumps(result, indent=2, ensure_ascii=False)
-                
-            except Exception as link_error:
-                logger.debug(f"Issue link creation failed: {str(link_error)}")
-                
-                # Final fallback: try the original epic link method
-                try:
-                    issue = jira.link_issue_to_epic(issue_key, epic_key)
-                    result = {
-                        "success": True,
-                        "message": f"Issue {issue_key} has been linked to epic {epic_key}",
-                        "issue": issue.to_simplified_dict(),
-                    }
-                    return json.dumps(result, indent=2, ensure_ascii=False)
-                except Exception as epic_error:
-                    logger.debug(f"Epic link method failed: {str(epic_error)}")
-                    raise link_error
-
-    except Exception as e:
-        logger.error(f"Error linking issue to epic: {str(e)}")
-        msg = f"Failed to link issue to epic: {str(e)}"
-        raise ValueError(msg) from e
 
 
 @jira_mcp.tool(tags={"jira", "read"})
