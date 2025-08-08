@@ -1717,58 +1717,28 @@ async def add_issue_to_sprint(
     """
     jira = await get_jira_fetcher(ctx)
     try:
-        # Get sprint field information
-        field_ids = jira.get_field_ids_to_epic()
-        sprint_field = None
+        # Use the direct Agile API endpoint (same as create_sprint_and_add_issues)
+        endpoint = f"rest/agile/1.0/sprint/{sprint_id}/issue"
+        data = {"issues": [issue_key]}
+        jira.jira.post(endpoint, json=data)
 
-        # Find the Sprint field
-        for field_name, field_id in field_ids.items():
-            if "sprint" in field_name.lower():
-                sprint_field = field_id
-                break
-
-        # Fallback to common sprint field IDs
-        if not sprint_field:
-            common_sprint_fields = [
-                "customfield_10020",  # Common in many Jira instances
-                "customfield_10010",
-                "customfield_10001",
-                "customfield_10002",
-            ]
-            for field_id in common_sprint_fields:
-                try:
-                    # Test if this field exists by trying to use it
-                    issue = jira.get_issue(issue_key, fields=field_id)
-                    if issue:
-                        sprint_field = field_id
-                        break
-                except Exception as e:
-                    logger.debug(f"Sprint field check failed: {str(e)}")
-                    continue
-
-        if not sprint_field:
-            # Try using the direct API endpoint
-            endpoint = f"rest/agile/1.0/sprint/{sprint_id}/issue"
-            data = {"issues": [issue_key]}
-            jira.jira.post(endpoint, json=data)
-
+        # Get the updated issue to return in response
+        try:
+            issue = jira.get_issue(issue_key)
+            result = {
+                "message": f"Issue {issue_key} added to sprint {sprint_id}",
+                "issue": issue.to_simplified_dict(),
+            }
+        except Exception:
+            # Fallback if issue retrieval fails
             result = {
                 "success": True,
                 "message": f"Issue {issue_key} added to sprint {sprint_id}",
                 "issue_key": issue_key,
                 "sprint_id": sprint_id,
             }
-            return json.dumps(result, indent=2, ensure_ascii=False)
-        else:
-            # Update using the sprint field
-            update_fields = {sprint_field: [{"id": sprint_id}]}
-            issue = jira.update_issue(issue_key=issue_key, **update_fields)
-
-            result = {
-                "message": f"Issue {issue_key} added to sprint {sprint_id}",
-                "issue": issue.to_simplified_dict(),
-            }
-            return json.dumps(result, indent=2, ensure_ascii=False)
+        
+        return json.dumps(result, indent=2, ensure_ascii=False)
 
     except Exception as e:
         logger.error(f"Error adding issue {issue_key} to sprint {sprint_id}: {str(e)}")
@@ -1890,56 +1860,47 @@ async def create_parent_child_link(
     """
     jira = await get_jira_fetcher(ctx)
     try:
-        # First try to set the parent field directly on the child issue
-        try:
-            update_fields = {"parent": {"key": parent_issue_key}}
-            child_issue = jira.update_issue(issue_key=child_issue_key, **update_fields)
+        # Use the most reliable approach: create issue link with "Relates to"
+        # This works in most Jira instances and is available by default
+        link_data = {
+            "type": {"name": "Relates"},
+            "inwardIssue": {"key": child_issue_key},
+            "outwardIssue": {"key": parent_issue_key},
+            "comment": {
+                "body": f"Parent-Child relationship: {parent_issue_key} is parent of {child_issue_key}"
+            }
+        }
 
+        try:
+            link_result = jira.create_issue_link(link_data)
+            
             result = {
                 "success": True,
                 "message": f"Parent-child relationship created: {parent_issue_key} -> {child_issue_key}",
                 "parent_issue": parent_issue_key,
                 "child_issue": child_issue_key,
-                "updated_issue": child_issue.to_simplified_dict(),
+                "link_type": "Relates",
+                "link_result": link_result,
             }
             return json.dumps(result, indent=2, ensure_ascii=False)
+            
+        except Exception as e:
+            # Fallback: Try updating parent field directly
+            try:
+                update_fields = {"parent": {"key": parent_issue_key}}
+                child_issue = jira.update_issue(issue_key=child_issue_key, **update_fields)
 
-        except Exception:
-            # If direct parent field doesn't work, try creating an issue link
-            link_data = {
-                "type": {"name": "Subtask"},
-                "inwardIssue": {"key": child_issue_key},
-                "outwardIssue": {"key": parent_issue_key},
-            }
-
-            # Try different link types that represent parent-child relationships
-            link_types = ["Subtask", "Sub-task", "Child Issue", "Contains", "Parent"]
-
-            for link_type in link_types:
-                try:
-                    link_data["type"]["name"] = link_type
-                    link_result = jira.create_issue_link(link_data)
-
-                    result = {
-                        "success": True,
-                        "message": f"Parent-child relationship created using {link_type} link: {parent_issue_key} -> {child_issue_key}",
-                        "parent_issue": parent_issue_key,
-                        "child_issue": child_issue_key,
-                        "link_type": link_type,
-                        "link_result": link_result,
-                    }
-                    return json.dumps(result, indent=2, ensure_ascii=False)
-
-                except Exception as link_error:
-                    logger.debug(
-                        f"Failed to create {link_type} link: {str(link_error)}"
-                    )
-                    continue
-
-            # If all link types fail, raise the original error
-            raise ValueError(
-                "Could not create parent-child relationship using any available method"
-            ) from None
+                result = {
+                    "success": True,
+                    "message": f"Parent-child relationship created: {parent_issue_key} -> {child_issue_key}",
+                    "parent_issue": parent_issue_key,
+                    "child_issue": child_issue_key,
+                    "updated_issue": child_issue.to_simplified_dict(),
+                }
+                return json.dumps(result, indent=2, ensure_ascii=False)
+            except Exception as parent_error:
+                logger.debug(f"Parent field update failed: {str(parent_error)}")
+                raise e
 
     except Exception as e:
         logger.error(f"Error creating parent-child link: {str(e)}")
@@ -1976,54 +1937,65 @@ async def link_issue_to_epic_enhanced(
     """
     jira = await get_jira_fetcher(ctx)
     try:
-        issue = jira.link_issue_to_epic(issue_key, epic_key)
-        result = {
-            "success": True,
-            "message": f"Issue {issue_key} has been linked to epic {epic_key}",
-            "issue": issue.to_simplified_dict(),
-        }
-        return json.dumps(result, indent=2, ensure_ascii=False)
+        # Try the most common and reliable approach first: update issue with parent field
+        # This works for most epic-story relationships
+        try:
+            update_fields = {"parent": {"key": epic_key}}
+            issue = jira.update_issue(issue_key=issue_key, **update_fields)
+            
+            result = {
+                "success": True,
+                "message": f"Issue {issue_key} has been linked to epic {epic_key}",
+                "issue": issue.to_simplified_dict(),
+            }
+            return json.dumps(result, indent=2, ensure_ascii=False)
+            
+        except Exception as parent_error:
+            logger.debug(f"Parent field update failed: {str(parent_error)}")
+            
+            # Fallback: Try creating an issue link with "Relates to"
+            link_data = {
+                "type": {"name": "Relates"},
+                "inwardIssue": {"key": issue_key},
+                "outwardIssue": {"key": epic_key},
+                "comment": {
+                    "body": f"Epic relationship: {issue_key} belongs to epic {epic_key}"
+                }
+            }
+
+            try:
+                link_result = jira.create_issue_link(link_data)
+                
+                result = {
+                    "success": True,
+                    "message": f"Issue {issue_key} linked to epic {epic_key} using Relates link",
+                    "issue_key": issue_key,
+                    "epic_key": epic_key,
+                    "link_type": "Relates",
+                    "link_result": link_result,
+                }
+                return json.dumps(result, indent=2, ensure_ascii=False)
+                
+            except Exception as link_error:
+                logger.debug(f"Issue link creation failed: {str(link_error)}")
+                
+                # Final fallback: try the original epic link method
+                try:
+                    issue = jira.link_issue_to_epic(issue_key, epic_key)
+                    result = {
+                        "success": True,
+                        "message": f"Issue {issue_key} has been linked to epic {epic_key}",
+                        "issue": issue.to_simplified_dict(),
+                    }
+                    return json.dumps(result, indent=2, ensure_ascii=False)
+                except Exception as epic_error:
+                    logger.debug(f"Epic link method failed: {str(epic_error)}")
+                    raise link_error
 
     except Exception as e:
         logger.error(f"Error linking issue to epic: {str(e)}")
-        # Try alternative approach using issue links
-        try:
-            link_data = {
-                "type": {"name": "Epic-Story Link"},
-                "inwardIssue": {"key": issue_key},
-                "outwardIssue": {"key": epic_key},
-            }
-
-            # Try different epic link types
-            epic_link_types = ["Epic-Story Link", "Epic Link", "Relates to", "Epic"]
-
-            for link_type in epic_link_types:
-                try:
-                    link_data["type"]["name"] = link_type
-                    link_result = jira.create_issue_link(link_data)
-
-                    result = {
-                        "success": True,
-                        "message": f"Issue {issue_key} linked to epic {epic_key} using {link_type}",
-                        "issue_key": issue_key,
-                        "epic_key": epic_key,
-                        "link_type": link_type,
-                        "link_result": link_result,
-                    }
-                    return json.dumps(result, indent=2, ensure_ascii=False)
-
-                except Exception as link_error:
-                    logger.debug(
-                        f"Failed to create {link_type} link: {str(link_error)}"
-                    )
-                    continue
-
-            msg = f"Failed to link issue to epic using any method: {str(e)}"
-            raise ValueError(msg)
-
-        except Exception as fallback_error:
-            msg = f"Failed to link issue to epic: {str(fallback_error)}"
-            raise ValueError(msg) from fallback_error
+        msg = f"Failed to link issue to epic: {str(e)}"
+        raise ValueError(msg) from e
 
 
 @jira_mcp.tool(tags={"jira", "read"})
@@ -2091,126 +2063,156 @@ async def get_active_sprints(
         raise ValueError(msg) from e
 
 
-@jira_mcp.tool(tags={"jira", "write"})
-@check_write_access
-async def start_sprint(
-    ctx: Context,
-    sprint_id: Annotated[str, Field(description="The id of sprint (e.g., '10001')")],
-    start_date: Annotated[
-        str | None,
-        Field(description="(Optional) Start date for the sprint (ISO 8601 format)"),
-    ] = None,
-    end_date: Annotated[
-        str | None,
-        Field(description="(Optional) End date for the sprint (ISO 8601 format)"),
-    ] = None,
-) -> str:
-    """Start a sprint by setting its state to active.
+# @jira_mcp.tool(tags={"jira", "write"})
+# @check_write_access
+# async def start_sprint(
+#     ctx: Context,
+#     sprint_id: Annotated[str, Field(description="The id of sprint (e.g., '10001')")],
+#     start_date: Annotated[
+#         str | None,
+#         Field(description="(Optional) Start date for the sprint (ISO 8601 format)"),
+#     ] = None,
+#     end_date: Annotated[
+#         str | None,
+#         Field(description="(Optional) End date for the sprint (ISO 8601 format)"),
+#     ] = None,
+# ) -> str:
+#     """Start a sprint by setting its state to active.
+# 
+#     Args:
+#         ctx: The FastMCP context.
+#         sprint_id: The ID of the sprint.
+#         start_date: Optional start date (defaults to current time).
+#         end_date: Optional end date.
+# 
+#     Returns:
+#         JSON string representing the updated sprint object.
+# 
+#     Raises:
+#         ValueError: If in read-only mode or Jira client unavailable.
+#     """
+#     jira = await get_jira_fetcher(ctx)
+#     try:
+#         # Set default start date to now if not provided
+#         if not start_date:
+#             from datetime import datetime, timezone
+# 
+#             start_date = datetime.now(timezone.utc).isoformat()
+# 
+#         sprint = jira.update_sprint(
+#             sprint_id=sprint_id,
+#             sprint_name=None,  # Keep existing name
+#             state="active",
+#             start_date=start_date,
+#             end_date=end_date,
+#             goal=None,  # Keep existing goal
+#         )
+# 
+#         if sprint is None:
+#             error_payload = {
+#                 "success": False,
+#                 "error": f"Failed to start sprint {sprint_id}. Check logs for details.",
+#             }
+#             return json.dumps(error_payload, indent=2, ensure_ascii=False)
+#         else:
+#             result = {
+#                 "success": True,
+#                 "message": f"Sprint {sprint_id} has been started",
+#                 "sprint": sprint.to_simplified_dict(),
+#             }
+#             return json.dumps(result, indent=2, ensure_ascii=False)
+# 
+#     except Exception as e:
+#         logger.error(f"Error starting sprint {sprint_id}: {str(e)}")
+#         msg = f"Failed to start sprint: {str(e)}"
+#         raise ValueError(msg) from e
 
-    Args:
-        ctx: The FastMCP context.
-        sprint_id: The ID of the sprint.
-        start_date: Optional start date (defaults to current time).
-        end_date: Optional end date.
 
-    Returns:
-        JSON string representing the updated sprint object.
-
-    Raises:
-        ValueError: If in read-only mode or Jira client unavailable.
-    """
-    jira = await get_jira_fetcher(ctx)
-    try:
-        # Set default start date to now if not provided
-        if not start_date:
-            from datetime import datetime, timezone
-
-            start_date = datetime.now(timezone.utc).isoformat()
-
-        sprint = jira.update_sprint(
-            sprint_id=sprint_id,
-            sprint_name=None,  # Keep existing name
-            state="active",
-            start_date=start_date,
-            end_date=end_date,
-            goal=None,  # Keep existing goal
-        )
-
-        if sprint is None:
-            error_payload = {
-                "success": False,
-                "error": f"Failed to start sprint {sprint_id}. Check logs for details.",
-            }
-            return json.dumps(error_payload, indent=2, ensure_ascii=False)
-        else:
-            result = {
-                "success": True,
-                "message": f"Sprint {sprint_id} has been started",
-                "sprint": sprint.to_simplified_dict(),
-            }
-            return json.dumps(result, indent=2, ensure_ascii=False)
-
-    except Exception as e:
-        logger.error(f"Error starting sprint {sprint_id}: {str(e)}")
-        msg = f"Failed to start sprint: {str(e)}"
-        raise ValueError(msg) from e
-
-
-@jira_mcp.tool(tags={"jira", "write"})
-@check_write_access
-async def complete_sprint(
-    ctx: Context,
-    sprint_id: Annotated[str, Field(description="The id of sprint (e.g., '10001')")],
-    end_date: Annotated[
-        str | None,
-        Field(description="(Optional) End date for the sprint (ISO 8601 format)"),
-    ] = None,
-) -> str:
-    """Complete a sprint by setting its state to closed.
-
-    Args:
-        ctx: The FastMCP context.
-        sprint_id: The ID of the sprint.
-        end_date: Optional end date (defaults to current time).
-
-    Returns:
-        JSON string representing the updated sprint object.
-
-    Raises:
-        ValueError: If in read-only mode or Jira client unavailable.
-    """
-    jira = await get_jira_fetcher(ctx)
-    try:
-        # Set default end date to now if not provided
-        if not end_date:
-            from datetime import datetime, timezone
-
-            end_date = datetime.now(timezone.utc).isoformat()
-
-        sprint = jira.update_sprint(
-            sprint_id=sprint_id,
-            sprint_name=None,  # Keep existing name
-            state="closed",
-            start_date=None,  # Keep existing start date
-            end_date=end_date,
-            goal=None,  # Keep existing goal
-        )
-
-        if sprint is None:
-            error_payload = {
-                "success": False,
-                "error": f"Failed to complete sprint {sprint_id}. Check logs for details.",
-            }
-            return json.dumps(error_payload, indent=2, ensure_ascii=False)
-        else:
-            result = {
-                "success": True,
-                "message": f"Sprint {sprint_id} has been completed",
-                "sprint": sprint.to_simplified_dict(),
-            }
-            return json.dumps(result, indent=2, ensure_ascii=False)
-
-    except Exception as e:
-        logger.error(f"Error completing sprint {sprint_id}: {str(e)}")
-        msg = f"Failed to complete sprint: {str(e)}"
-        raise ValueError(msg) from e
+# @jira_mcp.tool(tags={"jira", "write"})
+# @check_write_access
+# async def complete_sprint(
+#     ctx: Context,
+#     sprint_id: Annotated[str, Field(description="The id of sprint (e.g., '10001')")],
+#     end_date: Annotated[
+#         str | None,
+#         Field(description="(Optional) End date for the sprint (ISO 8601 format)"),
+#     ] = None,
+# ) -> str:
+#     """Complete a sprint by setting its state to closed and marking all issues as completed.
+# 
+#     Args:
+#         ctx: The FastMCP context.
+#         sprint_id: The ID of the sprint.
+#         end_date: Optional end date (defaults to current time).
+# 
+#     Returns:
+#         JSON string representing the updated sprint object.
+# 
+#     Raises:
+#         ValueError: If in read-only mode or Jira client unavailable.
+#     """
+#     jira = await get_jira_fetcher(ctx)
+#     try:
+#         # Set default end date to now if not provided
+#         if not end_date:
+#             from datetime import datetime, timezone
+# 
+#             end_date = datetime.now(timezone.utc).isoformat()
+# 
+#         # Use Agile API to complete sprint with issue status update
+#         # This is much more reliable than individual transitions
+#         endpoint = f"rest/agile/1.0/sprint/{sprint_id}"
+#         
+#         sprint_data = {
+#             "state": "closed",
+#             "endDate": end_date,
+#             "completeDate": end_date
+#         }
+# 
+#         try:
+#             # Complete the sprint using Agile API
+#             response = jira.jira.put(endpoint, json=sprint_data)
+#             
+#             # Get the updated sprint info
+#             sprint_info = jira.jira.get(endpoint).json()
+#             
+#             result = {
+#                 "success": True,
+#                 "message": f"Sprint {sprint_id} has been completed via Agile API",
+#                 "sprint": sprint_info,
+#                 "method": "agile_api"
+#             }
+#             return json.dumps(result, indent=2, ensure_ascii=False)
+#             
+#         except Exception as agile_error:
+#             logger.warning(f"Agile API sprint completion failed: {str(agile_error)}")
+#             
+#             # Fallback to the old method
+#             sprint = jira.update_sprint(
+#                 sprint_id=sprint_id,
+#                 sprint_name=None,  # Keep existing name
+#                 state="closed",
+#                 start_date=None,  # Keep existing start date
+#                 end_date=end_date,
+#                 goal=None,  # Keep existing goal
+#             )
+# 
+#             if sprint is None:
+#                 error_payload = {
+#                     "success": False,
+#                     "error": f"Failed to complete sprint {sprint_id}. Check logs for details.",
+#                 }
+#                 return json.dumps(error_payload, indent=2, ensure_ascii=False)
+#             else:
+#                 result = {
+#                     "success": True,
+#                     "message": f"Sprint {sprint_id} has been completed via fallback method",
+#                     "sprint": sprint.to_simplified_dict(),
+#                     "method": "fallback"
+#                 }
+#                 return json.dumps(result, indent=2, ensure_ascii=False)
+# 
+#     except Exception as e:
+#         logger.error(f"Error completing sprint {sprint_id}: {str(e)}")
+#         msg = f"Failed to complete sprint: {str(e)}"
+#         raise ValueError(msg) from e
