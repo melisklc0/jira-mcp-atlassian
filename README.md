@@ -753,6 +753,7 @@ Here's a complete example of setting up multi-user authentication with streamabl
 |           | `jira_get_board_issues`             |                                |
 |           | `jira_get_sprints_from_board`       |                                |
 |           | `jira_get_sprint_issues`            |                                |
+|           | `jira_get_active_sprints`           |                                |
 |           | `jira_get_issue_link_types`         |                                |
 |           | `jira_batch_get_changelogs`*        |                                |
 |           | `jira_get_user_profile`             |                                |
@@ -772,6 +773,10 @@ Here's a complete example of setting up multi-user authentication with streamabl
 |           | `jira_remove_issue_link`            |                                |
 |           | `jira_create_version`               |                                |
 |           | `jira_batch_create_versions`        |                                |
+|           | `jira_create_remote_issue_link`     |                                |
+|           | `jira_add_issue_to_sprint`          |                                |
+|           | `jira_create_sprint_and_add_issues` |                                |
+|           | `jira_create_parent_child_link`     |                                |
 
 </details>
 
