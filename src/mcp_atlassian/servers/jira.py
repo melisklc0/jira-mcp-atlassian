@@ -1854,24 +1854,27 @@ async def create_sprint_and_add_issues(
 
 @jira_mcp.tool(tags={"jira", "write"})
 @check_write_access
-async def create_parent_child_link(
+async def set_work_item_relation(
     ctx: Context,
-    parent_issue_key: Annotated[
-        str, Field(description="The key of the parent issue (e.g., 'PROJ-123')")
+    primary_issue_key: Annotated[
+        str, Field(description="The key of the primary work item (e.g., 'PROJ-123')")
     ],
-    child_issue_key: Annotated[
-        str, Field(description="The key of the child issue (e.g., 'PROJ-456')")
+    related_issue_key: Annotated[
+        str, Field(description="The key of the related work item (e.g., 'PROJ-456')")
     ],
 ) -> str:
-    """Create a parent-child relationship between two issues.
+    """Set relationships between work items.
+
+    This tool sets relationships between work items, creating new ones or updating existing ones.
+    It supports both hierarchical relationships (parent-child) and general associations.
 
     Args:
         ctx: The FastMCP context.
-        parent_issue_key: The key of the parent issue.
-        child_issue_key: The key of the child issue.
+        primary_issue_key: The key of the primary work item.
+        related_issue_key: The key of the related work item.
 
     Returns:
-        JSON string indicating success or failure.
+        JSON string indicating success or failure of setting the relationship.
 
     Raises:
         ValueError: If in read-only mode or Jira client unavailable.
@@ -1882,10 +1885,10 @@ async def create_parent_child_link(
         # This works in most Jira instances and is available by default
         link_data = {
             "type": {"name": "Relates"},
-            "inwardIssue": {"key": child_issue_key},
-            "outwardIssue": {"key": parent_issue_key},
+            "inwardIssue": {"key": related_issue_key},
+            "outwardIssue": {"key": primary_issue_key},
             "comment": {
-                "body": f"Parent-Child relationship: {parent_issue_key} is parent of {child_issue_key}"
+                "body": f"Work item relationship: {primary_issue_key} relates to {related_issue_key}"
             }
         }
 
@@ -1894,26 +1897,26 @@ async def create_parent_child_link(
             
             result = {
                 "success": True,
-                "message": f"Parent-child relationship created: {parent_issue_key} -> {child_issue_key}",
-                "parent_issue": parent_issue_key,
-                "child_issue": child_issue_key,
+                "message": f"Work item relationship set: {primary_issue_key} -> {related_issue_key}",
+                "primary_issue": primary_issue_key,
+                "related_issue": related_issue_key,
                 "link_type": "Relates",
                 "link_result": link_result,
             }
             return json.dumps(result, indent=2, ensure_ascii=False)
             
         except Exception as e:
-            # Fallback: Try updating parent field directly
+            # Fallback: Try updating parent field directly for hierarchical relationship
             try:
-                update_fields = {"parent": {"key": parent_issue_key}}
-                child_issue = jira.update_issue(issue_key=child_issue_key, **update_fields)
+                update_fields = {"parent": {"key": primary_issue_key}}
+                related_issue = jira.update_issue(issue_key=related_issue_key, **update_fields)
 
                 result = {
                     "success": True,
-                    "message": f"Parent-child relationship created: {parent_issue_key} -> {child_issue_key}",
-                    "parent_issue": parent_issue_key,
-                    "child_issue": child_issue_key,
-                    "updated_issue": child_issue.to_simplified_dict(),
+                    "message": f"Hierarchical relationship set: {primary_issue_key} -> {related_issue_key}",
+                    "primary_issue": primary_issue_key,
+                    "related_issue": related_issue_key,
+                    "updated_issue": related_issue.to_simplified_dict(),
                 }
                 return json.dumps(result, indent=2, ensure_ascii=False)
             except Exception as parent_error:
@@ -1921,8 +1924,8 @@ async def create_parent_child_link(
                 raise e
 
     except Exception as e:
-        logger.error(f"Error creating parent-child link: {str(e)}")
-        msg = f"Failed to create parent-child relationship: {str(e)}"
+        logger.error(f"Error setting work item relationship: {str(e)}")
+        msg = f"Failed to set work item relationship: {str(e)}"
         raise ValueError(msg) from e
 
 
