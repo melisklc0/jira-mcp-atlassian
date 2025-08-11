@@ -993,6 +993,71 @@ async def update_issue(
 
 @jira_mcp.tool(tags={"jira", "write"})
 @check_write_access
+async def assign_issue(
+    ctx: Context,
+    issue_key: Annotated[str, Field(description="Jira issue key (e.g., 'PROJ-123')")],
+    assignee: Annotated[
+        str | None,
+        Field(
+            description=(
+                "User identifier to assign the issue to. Can be email, display name, username, or account ID "
+                "(e.g., 'user@example.com', 'John Doe', 'johndoe', 'accountid:...'). "
+                "Use None or empty string to unassign the issue."
+            )
+        ),
+    ],
+) -> str:
+    """Assign a Jira issue to a user or unassign it.
+
+    This tool provides a simple way to assign tasks to people by updating the assignee field
+    of a Jira issue. It uses the same underlying logic as the update_issue function but is
+    specifically focused on assignment operations.
+
+    Args:
+        ctx: The FastMCP context.
+        issue_key: Jira issue key to assign.
+        assignee: User identifier to assign to, or None to unassign.
+
+    Returns:
+        JSON string representing the updated issue object.
+
+    Raises:
+        ValueError: If in read-only mode, Jira client unavailable, or invalid assignee.
+    """
+    jira = await get_jira_fetcher(ctx)
+    
+    # Handle unassignment
+    if assignee is None or assignee.strip() == "":
+        update_fields = {"assignee": None}
+    else:
+        # Use the assignee as provided - the client will handle user lookup
+        update_fields = {"assignee": assignee.strip()}
+
+    try:
+        issue = jira.update_issue(issue_key=issue_key, **update_fields)
+        result = issue.to_simplified_dict()
+        
+        # Determine assignment status for the message
+        assignee_info = result.get("assignee", {})
+        if assignee_info and assignee_info.get("display_name") != "Unassigned":
+            assigned_to = assignee_info.get("display_name", "Unknown User")
+            message = f"Issue {issue_key} has been assigned to {assigned_to}"
+        else:
+            message = f"Issue {issue_key} has been unassigned"
+        
+        return json.dumps(
+            {"message": message, "issue": result},
+            indent=2,
+            ensure_ascii=False,
+        )
+    except Exception as e:
+        logger.error(f"Error assigning issue {issue_key}: {str(e)}", exc_info=True) 
+        msg = f"Failed to assign issue {issue_key}: {str(e)}"
+        raise ValueError(msg) from e
+
+
+@jira_mcp.tool(tags={"jira", "write"})
+@check_write_access
 async def delete_issue(
     ctx: Context,
     issue_key: Annotated[str, Field(description="Jira issue key (e.g. PROJ-123)")],
